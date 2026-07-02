@@ -1,0 +1,393 @@
+#!/bin/bash
+# ╔══════════════════════════════════════════════════════╗
+# ║  phpswitch — Easy PHP Version Switcher for Ubuntu   ║
+# ║  Supports: Apache2 mod_php, PHP-FPM, Nginx, CLI     ║
+# ║  Author  : afiez (github.com/afiez97)               ║
+# ║  License : MIT                                       ║
+# ╚══════════════════════════════════════════════════════╝
+
+# ── Colors ──────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# ── Helpers ──────────────────────────────────────────────
+
+# Require root for any mutation operations
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        echo -e "${RED}✗ This script must be run as root.${NC}"
+        echo -e "  Try: ${CYAN}sudo phpswitch${NC}"
+        exit 1
+    fi
+}
+
+ok()   { echo -e "  ${GREEN}✓${NC} $*"; }
+info() { echo -e "  ${CYAN}→${NC} $*"; }
+warn() { echo -e "  ${YELLOW}⚠${NC}  $*"; }
+fail() { echo -e "  ${RED}✗${NC} $*"; }
+sep()  { echo -e "${DIM}──────────────────────────────────────────${NC}"; }
+
+# ── Discovery ────────────────────────────────────────────
+
+# Returns a space-separated, version-sorted list of installed PHP binaries
+get_installed_versions() {
+    local versions=()
+    for v in /usr/bin/php[0-9].[0-9] /usr/bin/php[0-9].[0-9][0-9]; do
+        [[ -x "$v" ]] && versions+=("$(basename "$v" | sed 's/php//')")
+    done
+    printf '%s\n' "${versions[@]}" | sort -V | tr '\n' ' '
+}
+
+# Returns the version currently pointed to by /usr/bin/php
+get_current_cli() {
+    readlink -f /usr/bin/php 2>/dev/null | grep -oP '[0-9]+\.[0-9]+$' || \
+    php --version 2>/dev/null | grep -oP 'PHP \K[0-9]+\.[0-9]+'
+}
+
+# Returns the PHP version currently active as Apache mod_php (or "none")
+get_current_apache() {
+    ls /etc/apache2/mods-enabled/php*.conf 2>/dev/null \
+        | grep -oP 'php\K[0-9]+\.[0-9]+' | head -1 || echo "none"
+}
+
+# Returns newline-separated list of PHP-FPM versions that are currently active
+get_active_fpm_versions() {
+    systemctl list-units --type=service --state=active --no-legend 2>/dev/null \
+        | awk '{print $1}' \
+        | grep -oP '^php[0-9]+\.[0-9]+-fpm' \
+        | grep -oP '[0-9]+\.[0-9]+' \
+        | sort -V
+}
+
+# Check if Apache module is available for a given PHP version
+has_apache_module() { [[ -f "/etc/apache2/mods-available/php${1}.conf" ]]; }
+
+# Check if PHP-FPM systemd unit is available for a given PHP version
+has_fpm()           { systemctl list-unit-files 2>/dev/null | grep -q "php${1}-fpm.service"; }
+
+# Silently test if services are running
+apache_running()    { systemctl is-active --quiet apache2 2>/dev/null; }
+nginx_running()     { systemctl is-active --quiet nginx 2>/dev/null; }
+
+# ── Status display ───────────────────────────────────────
+show_status() {
+    local cli_ver apache_ver active_fpm
+    cli_ver=$(get_current_cli)
+    apache_ver=$(get_current_apache)
+    active_fpm=$(get_active_fpm_versions)
+
+    echo ""
+    echo -e "${BOLD}${BLUE}  PHP Version Status${NC}"
+    sep
+
+    # CLI
+    echo -e "  ${BOLD}CLI      ${NC} PHP ${GREEN}${cli_ver}${NC}"
+
+    # Apache
+    if command -v apache2ctl &>/dev/null; then
+        local ast
+        ast=$(systemctl is-active apache2 2>/dev/null || echo "stopped")
+        if [[ "$apache_ver" != "none" ]]; then
+            echo -e "  ${BOLD}Apache   ${NC} mod_php${GREEN}${apache_ver}${NC}  (${ast})"
+        else
+            echo -e "  ${BOLD}Apache   ${NC} ${YELLOW}no PHP module active${NC}  (${ast})"
+        fi
+    fi
+
+    # PHP-FPM (all active instances)
+    if [[ -n "$active_fpm" ]]; then
+        for fv in $active_fpm; do
+            echo -e "  ${BOLD}PHP-FPM  ${NC} php${GREEN}${fv}${NC}-fpm  (active)"
+        done
+    else
+        echo -e "  ${BOLD}PHP-FPM  ${NC} ${YELLOW}none active${NC}"
+    fi
+
+    # Nginx
+    if command -v nginx &>/dev/null; then
+        local nst
+        nst=$(systemctl show nginx --property=ActiveState 2>/dev/null | cut -d= -f2)
+        [[ -z "$nst" ]] && nst="unknown"
+        echo -e "  ${BOLD}Nginx    ${NC} ${nst}"
+    fi
+
+    sep
+    echo -e "  ${BOLD}Installed PHP versions:${NC}"
+    for v in $(get_installed_versions); do
+        local tags=""
+        has_apache_module "$v" && tags+=" ${DIM}[apache]${NC}"
+        has_fpm "$v"            && tags+=" ${DIM}[fpm]${NC}"
+        local marker=""
+        [[ "$v" == "$cli_ver" ]] && marker="  ${GREEN}← CLI${NC}"
+        [[ "$v" == "$apache_ver" ]] && marker+="  ${BLUE}← Apache${NC}"
+        echo -e "    ${CYAN}PHP ${v}${NC}${tags}${marker}"
+    done
+    echo ""
+}
+
+# ── Switch: CLI ──────────────────────────────────────────
+switch_cli() {
+    local ver="$1"
+    info "Switching CLI to PHP ${ver}..."
+
+    # Set the main php alternative
+    update-alternatives --set php "/usr/bin/php${ver}" 2>/dev/null
+
+    # Switch companion tools if they are registered as alternatives
+    for cmd in phpize php-config phar phar.phar php-cgi; do
+        local bin="/usr/bin/${cmd}${ver}"
+        if update-alternatives --list "$cmd" &>/dev/null && [[ -x "$bin" ]]; then
+            update-alternatives --set "$cmd" "$bin" 2>/dev/null || true
+        fi
+    done
+
+    ok "CLI → php$(php --version 2>/dev/null | grep -oP 'PHP \K[0-9]+\.[0-9]+\.[0-9]+')"
+}
+
+# ── Switch: Apache mod_php ───────────────────────────────
+switch_apache() {
+    local ver="$1"
+
+    if ! command -v apache2ctl &>/dev/null; then
+        warn "Apache not found, skipping."
+        return
+    fi
+
+    if ! has_apache_module "$ver"; then
+        warn "Apache mod for PHP ${ver} not installed."
+        echo -e "       Install: ${CYAN}sudo apt install libapache2-mod-php${ver}${NC}"
+        return
+    fi
+
+    info "Switching Apache to PHP ${ver}..."
+
+    # Disable all currently enabled php modules
+    for mod_conf in /etc/apache2/mods-enabled/php*.conf; do
+        [[ -f "$mod_conf" ]] || continue
+        local modname
+        modname=$(basename "$mod_conf" .conf)
+        a2dismod "$modname" --force 2>/dev/null && echo -e "     Disabled ${modname}" || true
+    done
+
+    # Enable the requested version
+    a2enmod "php${ver}" 2>/dev/null
+    systemctl restart apache2
+    ok "Apache → mod_php${ver} enabled, apache2 restarted"
+}
+
+# ── Switch: PHP-FPM ──────────────────────────────────────
+switch_fpm() {
+    local ver="$1"
+
+    if ! systemctl list-unit-files 2>/dev/null | grep -q 'php[0-9].*fpm'; then
+        warn "No PHP-FPM services found, skipping."
+        return
+    fi
+
+    if ! has_fpm "$ver"; then
+        warn "PHP-FPM for version ${ver} not installed."
+        echo -e "       Install: ${CYAN}sudo apt install php${ver}-fpm${NC}"
+        return
+    fi
+
+    info "Switching PHP-FPM to php${ver}-fpm..."
+
+    # Stop all other running FPM versions
+    while IFS= read -r fpm_service; do
+        local fpm_ver
+        fpm_ver=$(echo "$fpm_service" | grep -oP '[0-9]+\.[0-9]+')
+        if [[ "$fpm_ver" != "$ver" ]]; then
+            if systemctl is-active --quiet "$fpm_service" 2>/dev/null; then
+                systemctl stop "$fpm_service" 2>/dev/null && \
+                    echo -e "     Stopped ${fpm_service}" || true
+            fi
+        fi
+    done < <(systemctl list-unit-files --type=service --no-legend 2>/dev/null \
+             | awk '{print $1}' | grep 'php[0-9]\+\.[0-9]\+-fpm')
+
+    # Enable and start the target FPM
+    systemctl enable "php${ver}-fpm" --quiet 2>/dev/null || true
+    systemctl restart "php${ver}-fpm"
+    ok "PHP-FPM → php${ver}-fpm active"
+
+    # Auto-update Nginx fastcgi_pass socket
+    update_nginx_fpm_socket "$ver"
+
+    # Reload Nginx if it is running
+    if nginx_running; then
+        info "Reloading Nginx..."
+        if nginx -t 2>/dev/null; then
+            systemctl reload nginx
+            ok "Nginx reloaded"
+        else
+            warn "Nginx config test failed — skipping reload. Run: ${CYAN}sudo nginx -t${NC}"
+        fi
+    else
+        warn "Nginx not running (skipping reload)"
+    fi
+}
+
+# ── Nginx: update FPM socket path in sites-enabled ───────
+update_nginx_fpm_socket() {
+    local ver="$1"
+    local new_socket="/run/php/php${ver}-fpm.sock"
+
+    # Scan all enabled Nginx sites and conf.d files
+    for site in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
+        [[ -f "$site" ]] || continue
+        if grep -qP 'fastcgi_pass\s+unix:/run/php/php[0-9]+\.[0-9]+-fpm\.sock' "$site"; then
+            local old_socket
+            old_socket=$(grep -oP 'unix:/run/php/php[0-9]+\.[0-9]+-fpm\.sock' "$site" | head -1)
+            if [[ "$old_socket" != "unix:${new_socket}" ]]; then
+                info "Updating Nginx socket in ${site##*/}: → php${ver}-fpm.sock"
+                sed -i "s|unix:/run/php/php[0-9]*\.[0-9]*-fpm\.sock|unix:${new_socket}|g" "$site"
+                ok "Nginx config updated"
+            fi
+        fi
+    done
+}
+
+# ── Composer reminder ────────────────────────────────────
+check_composer() {
+    if command -v composer &>/dev/null; then
+        local comp_php
+        comp_php=$(composer --version 2>/dev/null | grep -oP 'PHP \K[0-9]+\.[0-9]+' || echo "?")
+        echo -e "  ${DIM}Composer is using PHP ${comp_php} — open a new terminal to reflect CLI change.${NC}"
+    fi
+}
+
+# ── Core switch logic ────────────────────────────────────
+switch_version() {
+    local ver="$1"
+
+    # Validate the requested version is actually installed
+    if [[ ! -x "/usr/bin/php${ver}" ]]; then
+        fail "PHP ${ver} is not installed."
+        echo ""
+        echo -e "  Install it with:"
+        echo -e "  ${CYAN}sudo add-apt-repository ppa:ondrej/php${NC}"
+        echo -e "  ${CYAN}sudo apt update && sudo apt install php${ver}${NC}"
+        exit 1
+    fi
+
+    echo ""
+    echo -e "${BOLD}${BLUE}  Switching to PHP ${ver}${NC}"
+    sep
+
+    switch_cli    "$ver"
+    switch_apache "$ver"
+    switch_fpm    "$ver"
+
+    sep
+    check_composer
+    echo ""
+    echo -e "${BOLD}${GREEN}  Done! PHP ${ver} is now active.${NC}"
+    echo ""
+    show_status
+}
+
+# ── Interactive menu ─────────────────────────────────────
+interactive_menu() {
+    show_status
+
+    local versions
+    read -ra versions <<< "$(get_installed_versions)"
+
+    if [[ ${#versions[@]} -eq 0 ]]; then
+        fail "No PHP versions found!"
+        exit 1
+    fi
+
+    echo -e "${BOLD}  Switch to:${NC}"
+    for i in "${!versions[@]}"; do
+        local tags=""
+        has_apache_module "${versions[$i]}" && tags+=" [apache]"
+        has_fpm "${versions[$i]}"            && tags+=" [fpm]"
+        echo -e "    ${CYAN}[${BOLD}$((i+1))${NC}${CYAN}]${NC}  PHP ${versions[$i]}${DIM}${tags}${NC}"
+    done
+    echo -e "    ${CYAN}[${BOLD}s${NC}${CYAN}]${NC}  Show status"
+    echo -e "    ${CYAN}[${BOLD}q${NC}${CYAN}]${NC}  Quit"
+    echo ""
+    read -rp "  Choice: " choice
+
+    case "$choice" in
+        s|S) show_status ;;
+        q|Q) echo "  Bye!"; exit 0 ;;
+        [0-9]*)
+            local idx=$((choice - 1))
+            if [[ $idx -ge 0 && $idx -lt ${#versions[@]} ]]; then
+                switch_version "${versions[$idx]}"
+            else
+                fail "Invalid choice: ${choice}"; exit 1
+            fi
+            ;;
+        *)
+            # Allow typing version directly (e.g. "8.3")
+            if printf '%s\n' "${versions[@]}" | grep -qx "$choice"; then
+                switch_version "$choice"
+            else
+                fail "Invalid choice: ${choice}"; exit 1
+            fi
+            ;;
+    esac
+}
+
+# ── Help text ────────────────────────────────────────────
+print_help() {
+    echo -e "${BOLD}phpswitch${NC} — PHP version switcher for Ubuntu"
+    echo -e "${DIM}  Supports Apache2, Nginx, PHP-FPM, CLI${NC}"
+    echo ""
+    echo -e "${BOLD}Usage:${NC}"
+    echo -e "  ${CYAN}sudo phpswitch${NC}           Interactive menu"
+    echo -e "  ${CYAN}sudo phpswitch 8.3${NC}       Switch all components to PHP 8.3"
+    echo -e "  ${CYAN}sudo phpswitch 8.4${NC}       Switch all components to PHP 8.4"
+    echo -e "  ${CYAN}phpswitch --status${NC}       Show current PHP status  (no root needed)"
+    echo -e "  ${CYAN}phpswitch --help${NC}         Show this help"
+    echo ""
+    echo -e "${BOLD}What gets switched:${NC}"
+    echo -e "  ${GREEN}•${NC} CLI          update-alternatives → /usr/bin/php<ver>"
+    echo -e "  ${GREEN}•${NC} CLI tools    phpize, php-config, phar, php-cgi"
+    echo -e "  ${GREEN}•${NC} Apache2      a2dismod old, a2enmod new, restart apache2"
+    echo -e "  ${GREEN}•${NC} PHP-FPM      stop others, start php<ver>-fpm"
+    echo -e "  ${GREEN}•${NC} Nginx socket auto-update fastcgi_pass in sites-enabled"
+    echo -e "  ${GREEN}•${NC} Nginx        reload (after config test)"
+    echo ""
+    echo -e "${BOLD}Install new PHP versions:${NC}"
+    echo -e "  ${CYAN}sudo add-apt-repository ppa:ondrej/php${NC}"
+    echo -e "  ${CYAN}sudo apt install php8.5 php8.5-fpm libapache2-mod-php8.5${NC}"
+    echo ""
+}
+
+# ── Entry point ──────────────────────────────────────────
+main() {
+    case "${1:-}" in
+        --help|-h)
+            print_help
+            ;;
+        --status|-s)
+            show_status
+            ;;
+        "")
+            check_root
+            interactive_menu
+            ;;
+        [0-9].[0-9]|[0-9].[0-9][0-9])
+            check_root
+            switch_version "$1"
+            ;;
+        *)
+            fail "Unknown argument: $1"
+            echo -e "  Run: ${CYAN}phpswitch --help${NC}"
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"
