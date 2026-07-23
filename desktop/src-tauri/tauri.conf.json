@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "phpswitch-desktop",
+  "version": "1.0.0",
+  "identifier": "com.afiez.phpswitch",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "PHP Version Switcher",
+        "width": 800,
+        "height": 650,
+        "resizable": true,
+        "minWidth": 720,
+        "minHeight": 560
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage", "app", "dmg"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "Switch PHP versions",
+    "longDescription": "A native desktop app for switching the active PHP version for CLI, Apache, PHP-FPM, and Nginx (Ubuntu) or Homebrew (macOS)."
+  }
+}

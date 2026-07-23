@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "configure" ]; then
+    if [ -f /etc/sudoers.d/phpswitch ]; then
+        chown root:root /etc/sudoers.d/phpswitch
+        chmod 0440 /etc/sudoers.d/phpswitch
+        if command -v visudo >/dev/null 2>&1; then
+            if ! visudo -cf /etc/sudoers.d/phpswitch >/dev/null 2>&1; then
+                echo "phpswitch: /etc/sudoers.d/phpswitch failed validation, removing it." >&2
+                echo "phpswitch: the desktop app will still work but privileged actions will prompt for a password." >&2
+                rm -f /etc/sudoers.d/phpswitch
+            fi
+        fi
+    fi
+fi
+
+exit 0

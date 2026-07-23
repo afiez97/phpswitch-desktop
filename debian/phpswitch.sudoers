@@ -1,0 +1,9 @@
+# Managed by the phpswitch package.
+#
+# Lets any local user run only these exact phpswitch actions without a
+# password (used by the phpswitch desktop app's Linux backend). Each action
+# is validated inside phpswitch itself (version must match \d+\.\d+ and the
+# corresponding /usr/bin/php<ver> must exist) before it touches
+# update-alternatives, Apache, or PHP-FPM. No other command is granted —
+# this is not a general sudo NOPASSWD rule.
+ALL ALL=(root) NOPASSWD: /usr/bin/phpswitch --set-cli *, /usr/bin/phpswitch --set-apache *, /usr/bin/phpswitch --set-fpm *, /usr/bin/phpswitch --restart-services

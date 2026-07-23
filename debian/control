@@ -1,0 +1,13 @@
+Package: phpswitch
+Version: 1.0.0
+Section: admin
+Priority: optional
+Architecture: all
+Depends: bash, sudo, systemd
+Maintainer: afiez <afiez97@users.noreply.github.com>
+Homepage: https://github.com/afiez97/phpswitch
+Description: Easy PHP version switcher for Ubuntu
+ phpswitch switches the active PHP version for the CLI, Apache2 mod_php,
+ PHP-FPM, and Nginx in a single command, and auto-updates the Nginx
+ fastcgi_pass socket to match. A companion desktop app (phpswitch-desktop)
+ provides a native GUI for the same actions on Ubuntu and macOS.

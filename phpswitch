@@ -254,6 +254,76 @@ update_nginx_fpm_socket() {
     done
 }
 
+# ── Restart web servers only (no CLI/FPM version change) ─
+restart_web_servers() {
+    if command -v apache2ctl &>/dev/null; then
+        info "Restarting Apache..."
+        systemctl restart apache2 && ok "Apache restarted" || fail "Apache restart failed"
+    fi
+    if command -v nginx &>/dev/null; then
+        if nginx_running; then
+            info "Reloading Nginx..."
+            if nginx -t 2>/dev/null; then
+                systemctl reload nginx && ok "Nginx reloaded"
+            else
+                warn "Nginx config test failed — skipping reload. Run: sudo nginx -t"
+            fi
+        fi
+    fi
+}
+
+# ── Validation for desktop-app commands ──────────────────
+validate_version_arg() {
+    local ver="$1"
+    if [[ ! "$ver" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        fail "Invalid version: ${ver}"
+        exit 1
+    fi
+    if [[ ! -x "/usr/bin/php${ver}" ]]; then
+        fail "PHP ${ver} is not installed."
+        exit 1
+    fi
+}
+
+# ── JSON status (for the desktop app) ────────────────────
+json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+print_json_status() {
+    local cli_ver apache_ver active_fpm
+    cli_ver=$(get_current_cli)
+    apache_ver=$(get_current_apache)
+    active_fpm=$(get_active_fpm_versions)
+
+    local fpm_json="["
+    local first=1
+    for fv in $active_fpm; do
+        [[ $first -eq 0 ]] && fpm_json+=","
+        fpm_json+="\"$(json_escape "$fv")\""
+        first=0
+    done
+    fpm_json+="]"
+
+    local versions_json="["
+    first=1
+    for v in $(get_installed_versions); do
+        [[ $first -eq 0 ]] && versions_json+=","
+        local has_apache="false" has_fpm_v="false"
+        has_apache_module "$v" && has_apache="true"
+        has_fpm "$v" && has_fpm_v="true"
+        versions_json+="{\"version\":\"$(json_escape "$v")\",\"path\":\"/usr/bin/php$(json_escape "$v")\",\"hasApache\":${has_apache},\"hasFpm\":${has_fpm_v}}"
+        first=0
+    done
+    versions_json+="]"
+
+    printf '{"cli":"%s","apache":"%s","activeFpm":%s,"apacheRunning":%s,"nginxRunning":%s,"versions":%s}\n' \
+        "$(json_escape "$cli_ver")" \
+        "$(json_escape "$apache_ver")" \
+        "$fpm_json" \
+        "$(apache_running && echo true || echo false)" \
+        "$(nginx_running && echo true || echo false)" \
+        "$versions_json"
+}
+
 # ── Composer reminder ────────────────────────────────────
 check_composer() {
     if command -v composer &>/dev/null; then
@@ -349,6 +419,7 @@ print_help() {
     echo -e "  ${CYAN}sudo phpswitch 8.3${NC}       Switch all components to PHP 8.3"
     echo -e "  ${CYAN}sudo phpswitch 8.4${NC}       Switch all components to PHP 8.4"
     echo -e "  ${CYAN}phpswitch --status${NC}       Show current PHP status  (no root needed)"
+    echo -e "  ${CYAN}phpswitch --json-status${NC}  Show current PHP status as JSON (no root needed)"
     echo -e "  ${CYAN}phpswitch --help${NC}         Show this help"
     echo ""
     echo -e "${BOLD}What gets switched:${NC}"
@@ -373,6 +444,28 @@ main() {
             ;;
         --status|-s)
             show_status
+            ;;
+        --json-status)
+            print_json_status
+            ;;
+        --set-cli)
+            check_root
+            validate_version_arg "$2"
+            switch_cli "$2"
+            ;;
+        --set-apache)
+            check_root
+            validate_version_arg "$2"
+            switch_apache "$2"
+            ;;
+        --set-fpm)
+            check_root
+            validate_version_arg "$2"
+            switch_fpm "$2"
+            ;;
+        --restart-services)
+            check_root
+            restart_web_servers
             ;;
         "")
             check_root

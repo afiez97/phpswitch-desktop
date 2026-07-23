@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>PHP Version Switcher</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+  a { color: oklch(0.55 0.17 280); text-decoration: none; }
+  a:hover { color: oklch(0.48 0.17 280); }
+  button { transition: all .12s; }
+  button:hover:not(:disabled) { filter: brightness(0.97); }
+  button:disabled { cursor: not-allowed; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div style="height: 100vh; display: flex; flex-direction: column; background: oklch(0.99 0.002 265); font-family: 'Inter', system-ui, sans-serif;">
+
+    <!-- Header / status band -->
+    <div style="padding: 24px 28px; background: linear-gradient(180deg, oklch(0.99 0.002 265), oklch(0.97 0.004 265)); border-bottom: 1px solid oklch(0.91 0.006 265);">
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 20px;">
+        <div>
+          <div style="font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: oklch(0.6 0.01 265); margin-bottom: 6px;">Active CLI Version</div>
+          <div style="display: flex; align-items: baseline; gap: 10px;">
+            <span id="active-version" style="font-family: 'JetBrains Mono', monospace; font-size: 34px; font-weight: 600; color: oklch(0.25 0.02 265); line-height: 1;">PHP</span>
+            <span id="active-path" style="font-family: 'JetBrains Mono', monospace; font-size: 13px; color: oklch(0.55 0.01 265);"></span>
+          </div>
+        </div>
+        <button id="btn-rescan" style="display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 8px; border: 1px solid oklch(0.85 0.008 265); background: oklch(0.99 0.002 265); color: oklch(0.35 0.02 265); font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 500; cursor: pointer;">
+          <span id="rescan-icon" style="display: inline-block; font-size: 15px;">⟳</span> <span id="rescan-label">Rescan</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Web server targets -->
+    <div id="server-targets" style="padding: 20px 28px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; border-bottom: 1px solid oklch(0.93 0.006 265);">
+      <div id="apache-card" style="border: 1px solid oklch(0.9 0.006 265); border-radius: 10px; padding: 14px 16px; background: oklch(0.985 0.002 265);">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+          <span style="font-size: 13px; font-weight: 600; color: oklch(0.3 0.02 265);">Apache</span>
+          <span style="display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600;"><span id="apache-status-dot" style="width: 7px; height: 7px; border-radius: 50%;"></span><span id="apache-status-label"></span></span>
+        </div>
+        <div id="apache-version" style="font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 600; color: oklch(0.28 0.02 265);">PHP</div>
+        <div id="apache-pkg" style="font-size: 12px; color: oklch(0.58 0.01 265); margin-top: 2px;"></div>
+      </div>
+      <div style="border: 1px solid oklch(0.9 0.006 265); border-radius: 10px; padding: 14px 16px; background: oklch(0.985 0.002 265);">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+          <span style="font-size: 13px; font-weight: 600; color: oklch(0.3 0.02 265);">Nginx (FPM)</span>
+          <span style="display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600;"><span id="nginx-status-dot" style="width: 7px; height: 7px; border-radius: 50%;"></span><span id="nginx-status-label"></span></span>
+        </div>
+        <div id="nginx-version" style="font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 600; color: oklch(0.28 0.02 265);">PHP</div>
+        <div id="nginx-pkg" style="font-size: 12px; color: oklch(0.58 0.01 265); margin-top: 2px;"></div>
+      </div>
+    </div>
+
+    <!-- Detected versions list -->
+    <div style="flex: 1; padding: 18px 28px 24px; overflow-y: auto;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+        <span style="font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: oklch(0.6 0.01 265);">Detected Versions</span>
+        <span id="installed-count" style="font-size: 12px; color: oklch(0.58 0.01 265);"></span>
+      </div>
+
+      <div id="versions-list" style="display: flex; flex-direction: column; gap: 8px;"></div>
+    </div>
+
+    <!-- Footer / restart bar -->
+    <div style="padding: 14px 28px; background: oklch(0.97 0.003 265); border-top: 1px solid oklch(0.91 0.006 265); display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 58px;">
+      <span id="log-text" style="font-size: 12.5px; font-family: 'JetBrains Mono', monospace; color: oklch(0.55 0.01 265);">Loading…</span>
+      <button id="btn-restart" style="display: flex; align-items: center; gap: 8px; padding: 9px 16px; border-radius: 8px; border: none; font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 600; cursor: pointer; color: white;">
+        <span id="restart-icon" style="display: inline-block; font-size: 15px;">↻</span> <span id="restart-label">Restart web servers</span>
+      </button>
+    </div>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>
