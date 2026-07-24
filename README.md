@@ -5,7 +5,7 @@
 A native desktop app (and CLI) for switching the active PHP version on Ubuntu and macOS —
 CLI, Apache2 mod_php, PHP-FPM, and Nginx, all in one click.
 
-![Ubuntu](https://img.shields.io/badge/Ubuntu-20.04+-E95420?logo=ubuntu&logoColor=white)
+![Ubuntu](https://img.shields.io/badge/Ubuntu-22.04+-E95420?logo=ubuntu&logoColor=white)
 ![macOS](https://img.shields.io/badge/macOS-Homebrew-000000?logo=apple&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-blue)
 [![Releases](https://img.shields.io/github/v/release/afiez97/phpswitch-desktop?include_prereleases&label=release)](https://github.com/afiez97/phpswitch-desktop/releases)
@@ -20,19 +20,67 @@ CLI, Apache2 mod_php, PHP-FPM, and Nginx, all in one click.
 
 ---
 
-## Download
+## Compatibility
 
-Grab the latest build from **[Releases](https://github.com/afiez97/phpswitch-desktop/releases)**:
+| | Ubuntu | macOS |
+|---|---|---|
+| Tested on | 24.04 (amd64) | not yet — see [Troubleshooting](#macos-switching-isnt-verified-yet) |
+| `.deb` | needs `libwebkit2gtk-4.1-0` — available on **22.04+/24.04**; likely won't install cleanly on 20.04 | — |
+| `.AppImage` | bundles its own WebKit, so more portable across Ubuntu versions; needs `libfuse2` to double-click (or run with `--appimage-extract-and-run`) | — |
+| `.dmg`/`.app` | — | any recent macOS, amd64/arm64 build produced by CI |
 
-| Platform | File |
-|---|---|
-| Ubuntu (Debian package) | `phpswitch-desktop_*_amd64.deb` |
-| Ubuntu (portable, no install) | `phpswitch-desktop_*_amd64.AppImage` |
-| macOS | `phpswitch-desktop_*.dmg` |
+Only `amd64` builds are currently published — no ARM (e.g. Raspberry Pi Ubuntu) build yet.
 
-Ubuntu also needs the `phpswitch` CLI installed first — see [Installation](#installation) below.
-macOS needs [Homebrew](https://brew.sh) with a `php`/`php@X.Y` formula installed; no CLI package
-required.
+---
+
+## Install
+
+Two separate pieces, both required on Ubuntu: the **CLI** (does the actual switching) and the
+**desktop app** (the GUI on top of it). On macOS you only need the desktop app.
+
+### Step 1 — Ubuntu: install the CLI
+
+Download `phpswitch_*_all.deb` from **[Releases](https://github.com/afiez97/phpswitch-desktop/releases)**, then in a terminal:
+
+```bash
+sudo dpkg -i phpswitch_*_all.deb
+sudo apt-get install -f
+```
+
+(the second command only does something if the first one complained about missing dependencies)
+
+Check it worked:
+
+```bash
+phpswitch --status
+```
+
+You should see your current PHP versions printed — if you instead see a "command not found",
+the install didn't take; re-run the two commands above and check for errors.
+
+### Step 2 — install the desktop app
+
+**Ubuntu**, download `phpswitch-desktop_*_amd64.deb` from Releases, then:
+
+```bash
+sudo dpkg -i phpswitch-desktop_*_amd64.deb
+sudo apt-get install -f
+```
+
+It'll then appear in your app menu/search as **"phpswitch-desktop"**. Prefer not to install
+anything system-wide? Download the `.AppImage` instead:
+
+```bash
+chmod +x phpswitch-desktop_*_amd64.AppImage
+./phpswitch-desktop_*_amd64.AppImage
+```
+
+**macOS**: download `phpswitch-desktop_*.dmg` from Releases, open it, drag the app to
+Applications. Needs [Homebrew](https://brew.sh) with a `php`/`php@X.Y` formula already
+installed — no CLI package required.
+
+> Building from source instead of downloading a release? See
+> [Building from source](#building-from-source) below.
 
 ---
 
@@ -45,42 +93,6 @@ required.
 - Auto-updates the Nginx `fastcgi_pass` socket to match the active FPM version (Linux)
 - Shows which versions have Apache module / FPM support available
 - Also usable as a plain terminal CLI (`phpswitch`) if you don't want the GUI
-
----
-
-## Installation
-
-### 1. Install the `phpswitch` CLI (Ubuntu only — the desktop app's Linux backend needs it)
-
-```bash
-git clone https://github.com/afiez97/phpswitch-desktop.git
-cd phpswitch-desktop
-./build-deb.sh
-sudo dpkg -i build/phpswitch_*_all.deb
-```
-
-This installs `/usr/bin/phpswitch` and a scoped `/etc/sudoers.d/phpswitch` rule — see
-[What the sudoers rule grants](#what-the-sudoers-rule-grants).
-
-> macOS doesn't need this step — the desktop app talks to Homebrew directly.
-
-### 2. Install the desktop app
-
-Download the `.deb`/`.AppImage`/`.dmg` from [Releases](https://github.com/afiez97/phpswitch-desktop/releases), or build it yourself:
-
-```bash
-cd desktop
-npm install
-npm run build
-```
-
-See [`desktop/README.md`](desktop/README.md) for full build prerequisites and output paths.
-
-### Verify the CLI
-
-```bash
-phpswitch --status
-```
 
 ---
 
@@ -137,7 +149,7 @@ phpswitch --help
 
 | Requirement | Ubuntu | macOS |
 |---|---|---|
-| OS | 20.04, 22.04, 24.04 | recent macOS with [Homebrew](https://brew.sh) |
+| OS | 22.04, 24.04 (the CLI itself works on 20.04 too; the desktop app's `.deb` needs 22.04+ — see [Compatibility](#compatibility)) | recent macOS with [Homebrew](https://brew.sh) |
 | PHP versions | via `ondrej/php` PPA or `apt` | via `brew install php@X.Y` |
 | Web servers | Apache2 and/or Nginx (either, both, or neither) | Nginx via Homebrew (optional) |
 
@@ -215,8 +227,21 @@ The CLI will warn and show the install command — a version may be installed wi
 Composer reads `php` from `PATH`. Open a new terminal or run `hash -r` to refresh it.
 
 ### Desktop app: "Passwordless sudo isn't set up for phpswitch"
-Reinstall the CLI's `.deb` (`sudo dpkg -i build/phpswitch_*_all.deb`) — it installs the
-sudoers rule described above.
+Reinstall the CLI's `.deb` (`sudo dpkg -i phpswitch_*_all.deb`) — it installs the sudoers
+rule described above.
+
+### Desktop app doesn't show up in app search after installing
+First confirm it's actually installed — `dpkg -l | grep phpswitch-desktop` and
+`ls /usr/share/applications/phpswitch-desktop.desktop` should both show something. If they
+don't, the `.deb` install didn't actually run (a common mistake: pasting a command that was
+only *shown* as an example, rather than typing it directly — make sure you're running
+`sudo dpkg -i ...` yourself, not `echo`-ing it). If both checks pass but search still doesn't
+find it, refresh the caches and restart the shell:
+```bash
+sudo update-desktop-database /usr/share/applications
+sudo gtk-update-icon-cache -f -t /usr/share/icons/hicolor
+```
+then log out and back in (Wayland) or press `Alt+F2` → `r` → Enter (X11).
 
 ### macOS: switching isn't verified yet
 The macOS backend (`desktop/src-tauri/src/macos.rs`) was developed without access to a real
