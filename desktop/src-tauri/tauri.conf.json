@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "phpswitch-desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "identifier": "com.afiez.phpswitch",
   "build": {
     "frontendDist": "../src"

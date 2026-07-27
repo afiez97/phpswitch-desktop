@@ -9,6 +9,8 @@ let status = { cli: "?", apache: null, activeFpm: [], apacheRunning: false, ngin
 let dirty = false;
 let busyRescan = false;
 let busyRestart = false;
+let busyAction = false;
+const anyBusy = () => busyRescan || busyRestart || busyAction;
 
 function segBtn(active) {
   const base = "padding: 6px 11px; border-radius: 7px; font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600; cursor: pointer; transition: all .12s;";
@@ -75,8 +77,8 @@ function render() {
       const apacheBtn = document.createElement('button');
       apacheBtn.textContent = 'Apache';
       apacheBtn.style.cssText = segBtn(isApache);
-      apacheBtn.disabled = !v.hasApache;
-      if (!v.hasApache) apacheBtn.style.opacity = '0.4';
+      apacheBtn.disabled = !v.hasApache || anyBusy();
+      if (!v.hasApache || anyBusy()) apacheBtn.style.opacity = '0.4';
       apacheBtn.onclick = () => runAction('set_apache', v.version);
       actions.appendChild(apacheBtn);
     }
@@ -84,14 +86,16 @@ function render() {
     const nginxBtn = document.createElement('button');
     nginxBtn.textContent = 'Nginx';
     nginxBtn.style.cssText = segBtn(isNginx);
-    nginxBtn.disabled = !v.hasFpm;
-    if (!v.hasFpm) nginxBtn.style.opacity = '0.4';
+    nginxBtn.disabled = !v.hasFpm || anyBusy();
+    if (!v.hasFpm || anyBusy()) nginxBtn.style.opacity = '0.4';
     nginxBtn.onclick = () => runAction('set_fpm', v.version);
     actions.appendChild(nginxBtn);
 
     const cliBtn = document.createElement('button');
     cliBtn.textContent = isCli ? '✓ CLI' : 'CLI';
     cliBtn.style.cssText = segBtn(isCli);
+    cliBtn.disabled = anyBusy();
+    if (anyBusy()) cliBtn.style.opacity = '0.4';
     cliBtn.onclick = () => runAction('set_cli', v.version);
     actions.appendChild(cliBtn);
 
@@ -100,12 +104,12 @@ function render() {
 
   el('rescan-label').textContent = busyRescan ? 'Scanning…' : 'Rescan';
   el('rescan-icon').style.animation = busyRescan ? 'spin 0.9s linear infinite' : '';
-  el('btn-rescan').disabled = busyRescan;
+  el('btn-rescan').disabled = anyBusy();
 
   el('restart-label').textContent = busyRestart ? 'Restarting…' : 'Restart web servers';
   el('restart-icon').style.animation = busyRestart ? 'spin 0.9s linear infinite' : '';
   el('btn-restart').style.background = dirty ? ACCENT : GRAY;
-  el('btn-restart').disabled = busyRestart;
+  el('btn-restart').disabled = anyBusy();
 }
 
 function setLog(text, kind) {
@@ -126,35 +130,53 @@ async function loadStatus() {
 }
 
 async function runAction(command, version) {
+  if (anyBusy()) return;
+  busyAction = true; render();
   setLog(command === 'set_cli' ? 'Switching CLI to PHP ' + version + '…' : 'Applying change…', 'busy');
-  const data = await invoke(command, { version });
-  if (data.status) status = data.status;
-  if (command === 'set_apache' || command === 'set_fpm') dirty = true;
-  setLog(data.log, data.logKind);
-  render();
+  try {
+    const data = await invoke(command, { version });
+    if (data.status) status = data.status;
+    if (command === 'set_apache' || command === 'set_fpm') dirty = true;
+    setLog(data.log, data.logKind);
+  } catch (e) {
+    setLog(String(e), 'warn');
+  } finally {
+    busyAction = false;
+    render();
+  }
 }
 
 document.getElementById('btn-rescan').addEventListener('click', async () => {
-  if (busyRescan) return;
+  if (anyBusy()) return;
   busyRescan = true; render();
   setLog('Scanning installed PHP versions…', 'busy');
-  const data = await invoke('rescan');
-  if (data.status) status = data.status;
-  busyRescan = false;
-  setLog(data.log, data.logKind);
-  render();
+  try {
+    const data = await invoke('rescan');
+    if (data.status) status = data.status;
+    setLog(data.log, data.logKind);
+  } catch (e) {
+    setLog(String(e), 'warn');
+  } finally {
+    busyRescan = false;
+    render();
+  }
 });
 
 document.getElementById('btn-restart').addEventListener('click', async () => {
-  if (busyRestart) return;
+  if (anyBusy()) return;
   busyRestart = true; render();
   setLog('Restarting web servers…', 'busy');
-  const data = await invoke('restart_services');
-  if (data.status) status = data.status;
-  busyRestart = false;
-  dirty = false;
-  setLog(data.log, data.logKind);
-  render();
+  try {
+    const data = await invoke('restart_services');
+    if (data.status) status = data.status;
+    dirty = false;
+    setLog(data.log, data.logKind);
+  } catch (e) {
+    setLog(String(e), 'warn');
+  } finally {
+    busyRestart = false;
+    render();
+  }
 });
 
 render();

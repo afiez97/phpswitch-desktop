@@ -247,6 +247,27 @@ then log out and back in (Wayland) or press `Alt+F2` → `r` → Enter (X11).
 The macOS backend (`desktop/src-tauri/src/macos.rs`) was developed without access to a real
 Mac. If something doesn't behave as expected, please open an issue.
 
+### Desktop app freezes or crashes when clicking version buttons repeatedly
+Fixed in **desktop app v1.0.1** — versions before that had no "busy" guard on the
+Apache/Nginx/CLI buttons, so clicking one while a previous switch was still running (Apache
+restarts, FPM restarts, etc. take a moment) fired overlapping privileged commands and could
+lock up or crash the app. **Upgrade to v1.0.1 or later** (reinstall the latest
+`phpswitch-desktop` `.deb`/`.AppImage`/`.dmg` from
+[Releases](https://github.com/afiez97/phpswitch-desktop/releases)) — the buttons now disable
+themselves while a switch is in progress.
+
+---
+
+## Changelog
+
+### desktop app v1.0.1
+- Fix: version-switch buttons (Apache/Nginx/CLI) no longer stay clickable while a previous
+  switch is still in flight, which could freeze or crash the app on repeated clicks.
+- Fix: action failures are now caught and shown in the status bar instead of failing silently.
+
+### v1.0.0
+- Initial public release: CLI + native desktop app.
+
 ---
 
 ## Building from source

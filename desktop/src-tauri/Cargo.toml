@@ -1,6 +1,6 @@
 [package]
 name = "phpswitch-desktop"
-version = "1.0.0"
+version = "1.0.1"
 description = "Native desktop app for switching PHP versions"
 authors = ["afiez"]
 edition = "2021"
