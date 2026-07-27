@@ -10,10 +10,27 @@ let dirty = false;
 let busyRescan = false;
 let busyRestart = false;
 let busyAction = false;
+let busyTarget = null;
 const anyBusy = () => busyRescan || busyRestart || busyAction;
 
+function actionButton({ label, active, hasCapability = true, command, version }) {
+  const btn = document.createElement('button');
+  const key = command + ':' + version;
+  const isThisBusy = busyTarget === key;
+  btn.style.cssText = segBtn(active);
+  btn.disabled = !hasCapability || anyBusy();
+  if (isThisBusy) {
+    btn.innerHTML = '<span style="display:inline-block; animation: spin .8s linear infinite;">⟳</span>';
+  } else {
+    btn.textContent = label;
+    if (!hasCapability || anyBusy()) btn.style.opacity = '0.4';
+  }
+  btn.onclick = () => runAction(command, version);
+  return btn;
+}
+
 function segBtn(active) {
-  const base = "padding: 6px 11px; border-radius: 7px; font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600; cursor: pointer; transition: all .12s;";
+  const base = "padding: 6px 11px; border-radius: 7px; font-family: 'Inter', sans-serif; font-size: 12px; font-weight: 600; cursor: pointer; transition: all .12s; min-width: 52px; text-align: center;";
   if (active) return base + "background: " + ACCENT + "; color: white; border: 1px solid " + ACCENT + ";";
   return base + "background: oklch(0.98 0.002 265); color: oklch(0.42 0.02 265); border: 1px solid oklch(0.86 0.008 265);";
 }
@@ -74,30 +91,21 @@ function render() {
     const actions = row.querySelector('[data-actions]');
 
     if (apacheSupported) {
-      const apacheBtn = document.createElement('button');
-      apacheBtn.textContent = 'Apache';
-      apacheBtn.style.cssText = segBtn(isApache);
-      apacheBtn.disabled = !v.hasApache || anyBusy();
-      if (!v.hasApache || anyBusy()) apacheBtn.style.opacity = '0.4';
-      apacheBtn.onclick = () => runAction('set_apache', v.version);
-      actions.appendChild(apacheBtn);
+      actions.appendChild(actionButton({
+        label: 'Apache', active: isApache, hasCapability: v.hasApache,
+        command: 'set_apache', version: v.version,
+      }));
     }
 
-    const nginxBtn = document.createElement('button');
-    nginxBtn.textContent = 'Nginx';
-    nginxBtn.style.cssText = segBtn(isNginx);
-    nginxBtn.disabled = !v.hasFpm || anyBusy();
-    if (!v.hasFpm || anyBusy()) nginxBtn.style.opacity = '0.4';
-    nginxBtn.onclick = () => runAction('set_fpm', v.version);
-    actions.appendChild(nginxBtn);
+    actions.appendChild(actionButton({
+      label: 'Nginx', active: isNginx, hasCapability: v.hasFpm,
+      command: 'set_fpm', version: v.version,
+    }));
 
-    const cliBtn = document.createElement('button');
-    cliBtn.textContent = isCli ? '✓ CLI' : 'CLI';
-    cliBtn.style.cssText = segBtn(isCli);
-    cliBtn.disabled = anyBusy();
-    if (anyBusy()) cliBtn.style.opacity = '0.4';
-    cliBtn.onclick = () => runAction('set_cli', v.version);
-    actions.appendChild(cliBtn);
+    actions.appendChild(actionButton({
+      label: isCli ? '✓ CLI' : 'CLI', active: isCli,
+      command: 'set_cli', version: v.version,
+    }));
 
     list.appendChild(row);
   });
@@ -131,7 +139,7 @@ async function loadStatus() {
 
 async function runAction(command, version) {
   if (anyBusy()) return;
-  busyAction = true; render();
+  busyAction = true; busyTarget = command + ':' + version; render();
   setLog(command === 'set_cli' ? 'Switching CLI to PHP ' + version + '…' : 'Applying change…', 'busy');
   try {
     const data = await invoke(command, { version });
@@ -142,6 +150,7 @@ async function runAction(command, version) {
     setLog(String(e), 'warn');
   } finally {
     busyAction = false;
+    busyTarget = null;
     render();
   }
 }

@@ -24,8 +24,10 @@ fn read_status() -> Result<PhpStatus, String> {
 }
 
 #[tauri::command]
-fn get_status() -> Result<PhpStatus, String> {
-    read_status()
+async fn get_status() -> Result<PhpStatus, String> {
+    tauri::async_runtime::spawn_blocking(read_status)
+        .await
+        .map_err(|e| format!("Internal error: {e}"))?
 }
 
 #[derive(serde::Serialize)]
@@ -37,70 +39,89 @@ struct ActionResult {
     status: Option<PhpStatus>,
 }
 
-fn run_action(action_result: Result<String, String>) -> ActionResult {
-    match action_result {
-        Ok(log) => {
-            let status = read_status().ok();
-            ActionResult { ok: true, log, log_kind: "ok".to_string(), status }
-        }
-        Err(log) => {
-            let status = read_status().ok();
-            ActionResult { ok: false, log, log_kind: "warn".to_string(), status }
-        }
+// Runs `f` (and the subsequent status refresh) on a blocking thread pool
+// thread rather than the main thread — `f` shells out to `sudo phpswitch`,
+// which can take several seconds (Apache/FPM restarts). Tauri commands that
+// aren't `async` run on the main thread, which also drives the webview, so
+// a blocking call there would freeze the UI (no repaint) until it returns.
+async fn run_action<F>(f: F) -> ActionResult
+where
+    F: FnOnce() -> Result<String, String> + Send + 'static,
+{
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let action_result = f();
+        let status = read_status().ok();
+        (action_result, status)
+    })
+    .await;
+
+    match outcome {
+        Ok((Ok(log), status)) => ActionResult { ok: true, log, log_kind: "ok".to_string(), status },
+        Ok((Err(log), status)) => ActionResult { ok: false, log, log_kind: "warn".to_string(), status },
+        Err(e) => ActionResult {
+            ok: false,
+            log: format!("Internal error: {e}"),
+            log_kind: "warn".to_string(),
+            status: None,
+        },
     }
 }
 
 #[tauri::command]
-fn set_cli(version: String) -> ActionResult {
-    #[cfg(target_os = "linux")]
-    let result = linux::set_cli(&version);
-    #[cfg(target_os = "macos")]
-    let result = macos::set_cli(&version);
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    let result: Result<String, String> = Err("Unsupported platform.".to_string());
-
-    run_action(result)
+async fn set_cli(version: String) -> ActionResult {
+    run_action(move || {
+        #[cfg(target_os = "linux")]
+        { linux::set_cli(&version) }
+        #[cfg(target_os = "macos")]
+        { macos::set_cli(&version) }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        { Err("Unsupported platform.".to_string()) }
+    })
+    .await
 }
 
 #[tauri::command]
-fn set_apache(version: String) -> ActionResult {
-    #[cfg(target_os = "linux")]
-    let result = linux::set_apache(&version);
-    #[cfg(target_os = "macos")]
-    let result = macos::set_apache(&version);
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    let result: Result<String, String> = Err("Unsupported platform.".to_string());
-
-    run_action(result)
+async fn set_apache(version: String) -> ActionResult {
+    run_action(move || {
+        #[cfg(target_os = "linux")]
+        { linux::set_apache(&version) }
+        #[cfg(target_os = "macos")]
+        { macos::set_apache(&version) }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        { Err("Unsupported platform.".to_string()) }
+    })
+    .await
 }
 
 #[tauri::command]
-fn set_fpm(version: String) -> ActionResult {
-    #[cfg(target_os = "linux")]
-    let result = linux::set_fpm(&version);
-    #[cfg(target_os = "macos")]
-    let result = macos::set_fpm(&version);
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    let result: Result<String, String> = Err("Unsupported platform.".to_string());
-
-    run_action(result)
+async fn set_fpm(version: String) -> ActionResult {
+    run_action(move || {
+        #[cfg(target_os = "linux")]
+        { linux::set_fpm(&version) }
+        #[cfg(target_os = "macos")]
+        { macos::set_fpm(&version) }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        { Err("Unsupported platform.".to_string()) }
+    })
+    .await
 }
 
 #[tauri::command]
-fn restart_services() -> ActionResult {
-    #[cfg(target_os = "linux")]
-    let result = linux::restart_services();
-    #[cfg(target_os = "macos")]
-    let result = macos::restart_services();
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    let result: Result<String, String> = Err("Unsupported platform.".to_string());
-
-    run_action(result)
+async fn restart_services() -> ActionResult {
+    run_action(|| {
+        #[cfg(target_os = "linux")]
+        { linux::restart_services() }
+        #[cfg(target_os = "macos")]
+        { macos::restart_services() }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        { Err("Unsupported platform.".to_string()) }
+    })
+    .await
 }
 
 #[tauri::command]
-fn rescan() -> ActionResult {
-    run_action(Ok("Rescanned installed PHP versions.".to_string()))
+async fn rescan() -> ActionResult {
+    run_action(|| Ok("Rescanned installed PHP versions.".to_string())).await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
