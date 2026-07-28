@@ -17,10 +17,25 @@ BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
 
+# ── Overridable path roots (defaults match a stock Ubuntu box; tests point
+#    these at a fake root instead) ──────────────────────────────────────
+PHP_BIN_DIR="${PHP_BIN_DIR:-/usr/bin}"
+APACHE_MODS_AVAILABLE="${APACHE_MODS_AVAILABLE:-/etc/apache2/mods-available}"
+APACHE_MODS_ENABLED="${APACHE_MODS_ENABLED:-/etc/apache2/mods-enabled}"
+NGINX_SITES_ENABLED="${NGINX_SITES_ENABLED:-/etc/nginx/sites-enabled}"
+NGINX_CONF_D="${NGINX_CONF_D:-/etc/nginx/conf.d}"
+FPM_SOCK_DIR="${FPM_SOCK_DIR:-/run/php}"
+
+# Set to 1 by a `--dry-run` flag anywhere in argv (see main()). When set, no
+# mutating command is actually run — see would() below.
+DRY_RUN=0
+
 # ── Helpers ──────────────────────────────────────────────
 
-# Require root for any mutation operations
+# Require root for any mutation operations (skipped entirely under
+# --dry-run, since every dry-run code path is read-only).
 check_root() {
+    [[ "$DRY_RUN" -eq 1 ]] && return 0
     if [[ $EUID -ne 0 ]]; then
         echo -e "${RED}✗ This script must be run as root.${NC}"
         echo -e "  Try: ${CYAN}sudo phpswitch${NC}"
@@ -32,6 +47,7 @@ ok()   { echo -e "  ${GREEN}✓${NC} $*"; }
 info() { echo -e "  ${CYAN}→${NC} $*"; }
 warn() { echo -e "  ${YELLOW}⚠${NC}  $*"; }
 fail() { echo -e "  ${RED}✗${NC} $*"; }
+would() { echo -e "  ${MAGENTA}[dry-run]${NC} would run: $*"; }
 sep()  { echo -e "${DIM}──────────────────────────────────────────${NC}"; }
 
 # ── Discovery ────────────────────────────────────────────
@@ -39,21 +55,21 @@ sep()  { echo -e "${DIM}──────────────────�
 # Returns a space-separated, version-sorted list of installed PHP binaries
 get_installed_versions() {
     local versions=()
-    for v in /usr/bin/php[0-9].[0-9] /usr/bin/php[0-9].[0-9][0-9]; do
+    for v in "${PHP_BIN_DIR}"/php[0-9].[0-9] "${PHP_BIN_DIR}"/php[0-9].[0-9][0-9]; do
         [[ -x "$v" ]] && versions+=("$(basename "$v" | sed 's/php//')")
     done
     printf '%s\n' "${versions[@]}" | sort -V | tr '\n' ' '
 }
 
-# Returns the version currently pointed to by /usr/bin/php
+# Returns the version currently pointed to by ${PHP_BIN_DIR}/php
 get_current_cli() {
-    readlink -f /usr/bin/php 2>/dev/null | grep -oP '[0-9]+\.[0-9]+$' || \
-    php --version 2>/dev/null | grep -oP 'PHP \K[0-9]+\.[0-9]+'
+    readlink -f "${PHP_BIN_DIR}/php" 2>/dev/null | grep -oP '[0-9]+\.[0-9]+$' || \
+    "${PHP_BIN_DIR}/php" --version 2>/dev/null | grep -oP 'PHP \K[0-9]+\.[0-9]+'
 }
 
 # Returns the PHP version currently active as Apache mod_php (or "none")
 get_current_apache() {
-    ls /etc/apache2/mods-enabled/php*.conf 2>/dev/null \
+    ls "${APACHE_MODS_ENABLED}"/php*.conf 2>/dev/null \
         | grep -oP 'php\K[0-9]+\.[0-9]+' | head -1 || echo "none"
 }
 
@@ -67,7 +83,7 @@ get_active_fpm_versions() {
 }
 
 # Check if Apache module is available for a given PHP version
-has_apache_module() { [[ -f "/etc/apache2/mods-available/php${1}.conf" ]]; }
+has_apache_module() { [[ -f "${APACHE_MODS_AVAILABLE}/php${1}.conf" ]]; }
 
 # Check if PHP-FPM systemd unit is available for a given PHP version
 has_fpm()           { systemctl list-unit-files 2>/dev/null | grep -q "php${1}-fpm.service"; }
@@ -135,69 +151,117 @@ show_status() {
 # ── Switch: CLI ──────────────────────────────────────────
 switch_cli() {
     local ver="$1"
+
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        info "Would switch CLI to PHP ${ver}"
+        would update-alternatives --set php "${PHP_BIN_DIR}/php${ver}"
+        for cmd in phpize php-config phar phar.phar php-cgi; do
+            local bin="${PHP_BIN_DIR}/${cmd}${ver}"
+            if update-alternatives --list "$cmd" &>/dev/null && [[ -x "$bin" ]]; then
+                would update-alternatives --set "$cmd" "$bin"
+            fi
+        done
+        return 0
+    fi
+
     info "Switching CLI to PHP ${ver}..."
 
     # Set the main php alternative
-    update-alternatives --set php "/usr/bin/php${ver}" 2>/dev/null
+    if ! update-alternatives --set php "${PHP_BIN_DIR}/php${ver}" 2>/dev/null; then
+        fail "Failed to set php alternative to ${ver}"
+        return 1
+    fi
 
     # Switch companion tools if they are registered as alternatives
     for cmd in phpize php-config phar phar.phar php-cgi; do
-        local bin="/usr/bin/${cmd}${ver}"
+        local bin="${PHP_BIN_DIR}/${cmd}${ver}"
         if update-alternatives --list "$cmd" &>/dev/null && [[ -x "$bin" ]]; then
             update-alternatives --set "$cmd" "$bin" 2>/dev/null || true
         fi
     done
 
-    ok "CLI → php$(php --version 2>/dev/null | grep -oP 'PHP \K[0-9]+\.[0-9]+\.[0-9]+')"
+    ok "CLI → php$("${PHP_BIN_DIR}/php" --version 2>/dev/null | grep -oP 'PHP \K[0-9]+\.[0-9]+\.[0-9]+')"
+    return 0
 }
 
 # ── Switch: Apache mod_php ───────────────────────────────
+# Returns: 0 ok, 1 real failure, 2 intentionally skipped (not installed)
 switch_apache() {
     local ver="$1"
 
     if ! command -v apache2ctl &>/dev/null; then
         warn "Apache not found, skipping."
-        return
+        return 2
     fi
 
     if ! has_apache_module "$ver"; then
         warn "Apache mod for PHP ${ver} not installed."
         echo -e "       Install: ${CYAN}sudo apt install libapache2-mod-php${ver}${NC}"
-        return
+        return 2
     fi
 
-    info "Switching Apache to PHP ${ver}..."
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        info "Would switch Apache to PHP ${ver}"
+    else
+        info "Switching Apache to PHP ${ver}..."
+    fi
 
     # Disable all currently enabled php modules
-    for mod_conf in /etc/apache2/mods-enabled/php*.conf; do
+    for mod_conf in "${APACHE_MODS_ENABLED}"/php*.conf; do
         [[ -f "$mod_conf" ]] || continue
         local modname
         modname=$(basename "$mod_conf" .conf)
-        a2dismod "$modname" --force 2>/dev/null && echo -e "     Disabled ${modname}" || true
+        if [[ "$DRY_RUN" -eq 1 ]]; then
+            would a2dismod "$modname" --force
+        else
+            a2dismod "$modname" --force 2>/dev/null && echo -e "     Disabled ${modname}" || true
+        fi
     done
 
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        would a2enmod "php${ver}"
+        would systemctl restart apache2
+        return 0
+    fi
+
     # Enable the requested version
-    a2enmod "php${ver}" 2>/dev/null
-    systemctl restart apache2
+    if ! a2enmod "php${ver}" 2>/dev/null; then
+        fail "Failed to enable mod_php${ver}"
+        return 1
+    fi
+    if ! systemctl restart apache2; then
+        fail "Failed to restart apache2"
+        return 1
+    fi
     ok "Apache → mod_php${ver} enabled, apache2 restarted"
+    return 0
 }
 
 # ── Switch: PHP-FPM ──────────────────────────────────────
+# Returns: 0 ok, 1 real failure, 2 intentionally skipped (not installed)
+# Also sets the global NGINX_STATUS to one of ok/failed/skipped/"" (nginx is
+# tracked separately since a pre-existing broken nginx config shouldn't turn
+# an otherwise-successful FPM switch into a reported failure).
 switch_fpm() {
     local ver="$1"
+    NGINX_STATUS=""
 
     if ! systemctl list-unit-files 2>/dev/null | grep -q 'php[0-9].*fpm'; then
         warn "No PHP-FPM services found, skipping."
-        return
+        return 2
     fi
 
     if ! has_fpm "$ver"; then
         warn "PHP-FPM for version ${ver} not installed."
         echo -e "       Install: ${CYAN}sudo apt install php${ver}-fpm${NC}"
-        return
+        return 2
     fi
 
-    info "Switching PHP-FPM to php${ver}-fpm..."
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        info "Would switch PHP-FPM to php${ver}-fpm"
+    else
+        info "Switching PHP-FPM to php${ver}-fpm..."
+    fi
 
     # Stop all other running FPM versions
     while IFS= read -r fpm_service; do
@@ -205,16 +269,38 @@ switch_fpm() {
         fpm_ver=$(echo "$fpm_service" | grep -oP '[0-9]+\.[0-9]+')
         if [[ "$fpm_ver" != "$ver" ]]; then
             if systemctl is-active --quiet "$fpm_service" 2>/dev/null; then
-                systemctl stop "$fpm_service" 2>/dev/null && \
-                    echo -e "     Stopped ${fpm_service}" || true
+                if [[ "$DRY_RUN" -eq 1 ]]; then
+                    would systemctl stop "$fpm_service"
+                else
+                    systemctl stop "$fpm_service" 2>/dev/null && \
+                        echo -e "     Stopped ${fpm_service}" || true
+                fi
             fi
         fi
     done < <(systemctl list-unit-files --type=service --no-legend 2>/dev/null \
              | awk '{print $1}' | grep 'php[0-9]\+\.[0-9]\+-fpm')
 
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        would systemctl enable "php${ver}-fpm"
+        would systemctl restart "php${ver}-fpm"
+        # update_nginx_fpm_socket is dry-run aware itself (see below), so it
+        # can be called unconditionally here.
+        update_nginx_fpm_socket "$ver"
+        if nginx_running; then
+            would nginx -t "&&" systemctl reload nginx
+            NGINX_STATUS="ok"
+        else
+            NGINX_STATUS="skipped"
+        fi
+        return 0
+    fi
+
     # Enable and start the target FPM
     systemctl enable "php${ver}-fpm" --quiet 2>/dev/null || true
-    systemctl restart "php${ver}-fpm"
+    if ! systemctl restart "php${ver}-fpm"; then
+        fail "Failed to restart php${ver}-fpm"
+        return 1
+    fi
     ok "PHP-FPM → php${ver}-fpm active"
 
     # Auto-update Nginx fastcgi_pass socket
@@ -224,31 +310,44 @@ switch_fpm() {
     if nginx_running; then
         info "Reloading Nginx..."
         if nginx -t 2>/dev/null; then
-            systemctl reload nginx
-            ok "Nginx reloaded"
+            if systemctl reload nginx; then
+                ok "Nginx reloaded"
+                NGINX_STATUS="ok"
+            else
+                warn "Nginx reload failed"
+                NGINX_STATUS="failed"
+            fi
         else
             warn "Nginx config test failed — skipping reload. Run: ${CYAN}sudo nginx -t${NC}"
+            NGINX_STATUS="failed"
         fi
     else
         warn "Nginx not running (skipping reload)"
+        NGINX_STATUS="skipped"
     fi
+
+    return 0
 }
 
 # ── Nginx: update FPM socket path in sites-enabled ───────
 update_nginx_fpm_socket() {
     local ver="$1"
-    local new_socket="/run/php/php${ver}-fpm.sock"
+    local new_socket="${FPM_SOCK_DIR}/php${ver}-fpm.sock"
 
     # Scan all enabled Nginx sites and conf.d files
-    for site in /etc/nginx/sites-enabled/* /etc/nginx/conf.d/*.conf; do
+    for site in "${NGINX_SITES_ENABLED}"/* "${NGINX_CONF_D}"/*.conf; do
         [[ -f "$site" ]] || continue
-        if grep -qP 'fastcgi_pass\s+unix:/run/php/php[0-9]+\.[0-9]+-fpm\.sock' "$site"; then
+        if grep -qP "fastcgi_pass\s+unix:${FPM_SOCK_DIR}/php[0-9]+\.[0-9]+-fpm\.sock" "$site"; then
             local old_socket
-            old_socket=$(grep -oP 'unix:/run/php/php[0-9]+\.[0-9]+-fpm\.sock' "$site" | head -1)
+            old_socket=$(grep -oP "unix:${FPM_SOCK_DIR}/php[0-9]+\.[0-9]+-fpm\.sock" "$site" | head -1)
             if [[ "$old_socket" != "unix:${new_socket}" ]]; then
-                info "Updating Nginx socket in ${site##*/}: → php${ver}-fpm.sock"
-                sed -i "s|unix:/run/php/php[0-9]*\.[0-9]*-fpm\.sock|unix:${new_socket}|g" "$site"
-                ok "Nginx config updated"
+                if [[ "$DRY_RUN" -eq 1 ]]; then
+                    would "sed -i s|${old_socket}|unix:${new_socket}| ${site}"
+                else
+                    info "Updating Nginx socket in ${site##*/}: → php${ver}-fpm.sock"
+                    sed -i "s|unix:${FPM_SOCK_DIR}/php[0-9]*\.[0-9]*-fpm\.sock|unix:${new_socket}|g" "$site"
+                    ok "Nginx config updated"
+                fi
             fi
         fi
     done
@@ -257,16 +356,24 @@ update_nginx_fpm_socket() {
 # ── Restart web servers only (no CLI/FPM version change) ─
 restart_web_servers() {
     if command -v apache2ctl &>/dev/null; then
-        info "Restarting Apache..."
-        systemctl restart apache2 && ok "Apache restarted" || fail "Apache restart failed"
+        if [[ "$DRY_RUN" -eq 1 ]]; then
+            would systemctl restart apache2
+        else
+            info "Restarting Apache..."
+            systemctl restart apache2 && ok "Apache restarted" || fail "Apache restart failed"
+        fi
     fi
     if command -v nginx &>/dev/null; then
         if nginx_running; then
-            info "Reloading Nginx..."
-            if nginx -t 2>/dev/null; then
-                systemctl reload nginx && ok "Nginx reloaded"
+            if [[ "$DRY_RUN" -eq 1 ]]; then
+                would nginx -t "&&" systemctl reload nginx
             else
-                warn "Nginx config test failed — skipping reload. Run: sudo nginx -t"
+                info "Reloading Nginx..."
+                if nginx -t 2>/dev/null; then
+                    systemctl reload nginx && ok "Nginx reloaded"
+                else
+                    warn "Nginx config test failed — skipping reload. Run: sudo nginx -t"
+                fi
             fi
         fi
     fi
@@ -279,7 +386,7 @@ validate_version_arg() {
         fail "Invalid version: ${ver}"
         exit 1
     fi
-    if [[ ! -x "/usr/bin/php${ver}" ]]; then
+    if [[ ! -x "${PHP_BIN_DIR}/php${ver}" ]]; then
         fail "PHP ${ver} is not installed."
         exit 1
     fi
@@ -310,7 +417,7 @@ print_json_status() {
         local has_apache="false" has_fpm_v="false"
         has_apache_module "$v" && has_apache="true"
         has_fpm "$v" && has_fpm_v="true"
-        versions_json+="{\"version\":\"$(json_escape "$v")\",\"path\":\"/usr/bin/php$(json_escape "$v")\",\"hasApache\":${has_apache},\"hasFpm\":${has_fpm_v}}"
+        versions_json+="{\"version\":\"$(json_escape "$v")\",\"path\":\"${PHP_BIN_DIR}/php$(json_escape "$v")\",\"hasApache\":${has_apache},\"hasFpm\":${has_fpm_v}}"
         first=0
     done
     versions_json+="]"
@@ -333,12 +440,47 @@ check_composer() {
     fi
 }
 
+# ── Component status (0/1/2) → human label ───────────────
+status_label() {
+    case "$1" in
+        0) echo -e "${GREEN}ok${NC}" ;;
+        1) echo -e "${RED}failed${NC}" ;;
+        2) echo -e "${DIM}skipped${NC}" ;;
+        *) echo -e "${DIM}n/a${NC}" ;;
+    esac
+}
+
+# ── Per-component summary block printed after a switch ───
+print_switch_summary() {
+    local ver="$1" cli_rc="$2" apache_rc="$3" fpm_rc="$4" nginx_status="$5"
+
+    echo -e "${BOLD}  Summary${NC}"
+    echo -e "    CLI      $(status_label "$cli_rc")"
+    echo -e "    Apache   $(status_label "$apache_rc")"
+    echo -e "    PHP-FPM  $(status_label "$fpm_rc")"
+    case "$nginx_status" in
+        ok)      echo -e "    Nginx    ${GREEN}ok${NC}" ;;
+        failed)  echo -e "    Nginx    ${RED}failed${NC}" ;;
+        skipped) echo -e "    Nginx    ${DIM}skipped${NC}" ;;
+        *)       echo -e "    Nginx    ${DIM}n/a${NC}" ;;
+    esac
+    echo ""
+
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        echo -e "${BOLD}${MAGENTA}  Dry run only — no changes were made.${NC}"
+    elif [[ "$cli_rc" -eq 1 || "$apache_rc" -eq 1 || "$fpm_rc" -eq 1 ]]; then
+        echo -e "${BOLD}${RED}  Completed with errors — PHP ${ver} may not be fully active. See above.${NC}"
+    else
+        echo -e "${BOLD}${GREEN}  Done! PHP ${ver} is now active.${NC}"
+    fi
+}
+
 # ── Core switch logic ────────────────────────────────────
 switch_version() {
     local ver="$1"
 
     # Validate the requested version is actually installed
-    if [[ ! -x "/usr/bin/php${ver}" ]]; then
+    if [[ ! -x "${PHP_BIN_DIR}/php${ver}" ]]; then
         fail "PHP ${ver} is not installed."
         echo ""
         echo -e "  Install it with:"
@@ -351,16 +493,21 @@ switch_version() {
     echo -e "${BOLD}${BLUE}  Switching to PHP ${ver}${NC}"
     sep
 
-    switch_cli    "$ver"
-    switch_apache "$ver"
-    switch_fpm    "$ver"
+    local cli_rc apache_rc fpm_rc
+    switch_cli    "$ver"; cli_rc=$?
+    switch_apache "$ver"; apache_rc=$?
+    switch_fpm    "$ver"; fpm_rc=$?
 
     sep
     check_composer
     echo ""
-    echo -e "${BOLD}${GREEN}  Done! PHP ${ver} is now active.${NC}"
+    print_switch_summary "$ver" "$cli_rc" "$apache_rc" "$fpm_rc" "$NGINX_STATUS"
     echo ""
     show_status
+
+    local overall_rc=0
+    [[ "$cli_rc" -eq 1 || "$apache_rc" -eq 1 || "$fpm_rc" -eq 1 ]] && overall_rc=1
+    exit "$overall_rc"
 }
 
 # ── Interactive menu ─────────────────────────────────────
@@ -415,12 +562,13 @@ print_help() {
     echo -e "${DIM}  Supports Apache2, Nginx, PHP-FPM, CLI${NC}"
     echo ""
     echo -e "${BOLD}Usage:${NC}"
-    echo -e "  ${CYAN}sudo phpswitch${NC}           Interactive menu"
-    echo -e "  ${CYAN}sudo phpswitch 8.3${NC}       Switch all components to PHP 8.3"
-    echo -e "  ${CYAN}sudo phpswitch 8.4${NC}       Switch all components to PHP 8.4"
-    echo -e "  ${CYAN}phpswitch --status${NC}       Show current PHP status  (no root needed)"
-    echo -e "  ${CYAN}phpswitch --json-status${NC}  Show current PHP status as JSON (no root needed)"
-    echo -e "  ${CYAN}phpswitch --help${NC}         Show this help"
+    echo -e "  ${CYAN}sudo phpswitch${NC}              Interactive menu"
+    echo -e "  ${CYAN}sudo phpswitch 8.3${NC}          Switch all components to PHP 8.3"
+    echo -e "  ${CYAN}sudo phpswitch 8.4${NC}          Switch all components to PHP 8.4"
+    echo -e "  ${CYAN}phpswitch --status${NC}          Show current PHP status  (no root needed)"
+    echo -e "  ${CYAN}phpswitch --json-status${NC}     Show current PHP status as JSON (no root needed)"
+    echo -e "  ${CYAN}phpswitch 8.3 --dry-run${NC}     Preview a switch to PHP 8.3 — no changes made, no root needed"
+    echo -e "  ${CYAN}phpswitch --help${NC}            Show this help"
     echo ""
     echo -e "${BOLD}What gets switched:${NC}"
     echo -e "  ${GREEN}•${NC} CLI          update-alternatives → /usr/bin/php<ver>"
@@ -438,6 +586,19 @@ print_help() {
 
 # ── Entry point ──────────────────────────────────────────
 main() {
+    # Recognize --dry-run in any position and strip it out before dispatch,
+    # so `phpswitch --dry-run 8.3`, `phpswitch 8.3 --dry-run`, and
+    # `phpswitch --set-cli 8.3 --dry-run` all work the same way.
+    local args=()
+    for a in "$@"; do
+        if [[ "$a" == "--dry-run" ]]; then
+            DRY_RUN=1
+        else
+            args+=("$a")
+        fi
+    done
+    set -- "${args[@]}"
+
     case "${1:-}" in
         --help|-h)
             print_help
@@ -457,11 +618,21 @@ main() {
             check_root
             validate_version_arg "$2"
             switch_apache "$2"
+            # Translate switch_apache's 0/1/2 into a process exit code: an
+            # intentional skip (2, e.g. "Apache not installed") must exit 0,
+            # not 2 — otherwise a machine with no Apache would make the
+            # desktop app's `run_privileged` see a nonzero exit and report a
+            # false failure for something that was never an error.
+            [[ $? -eq 1 ]] && exit 1
+            exit 0
             ;;
         --set-fpm)
             check_root
             validate_version_arg "$2"
             switch_fpm "$2"
+            # Same 1-only-fails translation as --set-apache above.
+            [[ $? -eq 1 ]] && exit 1
+            exit 0
             ;;
         --restart-services)
             check_root
@@ -483,4 +654,6 @@ main() {
     esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

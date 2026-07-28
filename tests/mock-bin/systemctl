@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# Stateful mock of systemctl for phpswitch bats tests. Reads/writes unit
+# lists under $MOCK_STATE_DIR/systemd so a restart/stop in one call is
+# visible to a later is-active/list-units call within the same test.
+
+: "${MOCK_STATE_DIR:?MOCK_STATE_DIR not set}"
+STATE="${MOCK_STATE_DIR}/systemd"
+mkdir -p "$STATE"
+touch "$STATE/units.installed" "$STATE/units.active" "$STATE/fail"
+
+[[ -n "${MOCK_LOG:-}" ]] && echo "systemctl $*" >> "$MOCK_LOG"
+
+strip_service() { echo "${1%.service}"; }
+is_failing() { grep -qxF "$1" "$STATE/fail" 2>/dev/null; }
+
+cmd="${1:-}"; shift || true
+
+case "$cmd" in
+    list-units)
+        while IFS= read -r u; do
+            [[ -z "$u" ]] && continue
+            if grep -qxF "$u" "$STATE/units.active" 2>/dev/null; then
+                echo "${u}.service loaded active running Mock unit"
+            fi
+        done < "$STATE/units.installed"
+        ;;
+    list-unit-files)
+        while IFS= read -r u; do
+            [[ -z "$u" ]] && continue
+            echo "${u}.service enabled"
+        done < "$STATE/units.installed"
+        ;;
+    is-active)
+        quiet=0 unit=""
+        for a in "$@"; do
+            case "$a" in
+                --quiet) quiet=1 ;;
+                -*) ;;
+                *) unit=$(strip_service "$a") ;;
+            esac
+        done
+        if grep -qxF "$unit" "$STATE/units.active" 2>/dev/null; then
+            [[ $quiet -eq 0 ]] && echo "active"
+            exit 0
+        else
+            [[ $quiet -eq 0 ]] && echo "inactive"
+            exit 3
+        fi
+        ;;
+    show)
+        unit="" prop=""
+        for a in "$@"; do
+            case "$a" in
+                --property=*) prop="${a#--property=}" ;;
+                -*) ;;
+                *) unit=$(strip_service "$a") ;;
+            esac
+        done
+        if grep -qxF "$unit" "$STATE/units.active" 2>/dev/null; then
+            echo "${prop}=active"
+        else
+            echo "${prop}=inactive"
+        fi
+        ;;
+    restart|start)
+        unit=$(strip_service "${1:-}")
+        if is_failing "${cmd}:${unit}"; then
+            echo "systemctl: Job for ${unit}.service failed." >&2
+            exit 1
+        fi
+        grep -qxF "$unit" "$STATE/units.installed" 2>/dev/null || echo "$unit" >> "$STATE/units.installed"
+        grep -qxF "$unit" "$STATE/units.active" 2>/dev/null || echo "$unit" >> "$STATE/units.active"
+        exit 0
+        ;;
+    stop)
+        unit=$(strip_service "${1:-}")
+        if is_failing "stop:${unit}"; then
+            exit 1
+        fi
+        grep -vxF "$unit" "$STATE/units.active" > "$STATE/units.active.tmp" 2>/dev/null
+        mv "$STATE/units.active.tmp" "$STATE/units.active"
+        exit 0
+        ;;
+    enable)
+        exit 0
+        ;;
+    reload)
+        unit=$(strip_service "${1:-}")
+        if is_failing "reload:${unit}"; then
+            exit 1
+        fi
+        exit 0
+        ;;
+    *)
+        exit 0
+        ;;
+esac

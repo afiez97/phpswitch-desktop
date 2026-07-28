@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Mock of a2dismod: removes the mods-enabled symlink for real. Tolerates a
+# trailing --force, as the script always passes one.
+
+: "${APACHE_MODS_ENABLED:?APACHE_MODS_ENABLED not set}"
+
+[[ -n "${MOCK_LOG:-}" ]] && echo "a2dismod $*" >> "$MOCK_LOG"
+
+mod="${1:-}"
+rm -f "${APACHE_MODS_ENABLED}/${mod}.conf"
+exit 0

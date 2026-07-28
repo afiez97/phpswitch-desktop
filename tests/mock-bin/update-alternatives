@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Mock of update-alternatives. `--set` really symlinks the alternative name
+# to its target inside the fake root, so get_current_cli's `readlink -f`
+# reflects the switch without needing the real update-alternatives database.
+
+: "${MOCK_STATE_DIR:?MOCK_STATE_DIR not set}"
+STATE="${MOCK_STATE_DIR}/alternatives"
+mkdir -p "$STATE"
+touch "$STATE/registered"
+
+[[ -n "${MOCK_LOG:-}" ]] && echo "update-alternatives $*" >> "$MOCK_LOG"
+
+case "${1:-}" in
+    --set)
+        name="$2" target="$3"
+        if [[ -f "$STATE/fail-set-${name}" ]]; then
+            echo "update-alternatives: error: forced failure for ${name}" >&2
+            exit 2
+        fi
+        ln -sf "$target" "$(dirname "$target")/${name}"
+        grep -qxF "$name" "$STATE/registered" 2>/dev/null || echo "$name" >> "$STATE/registered"
+        exit 0
+        ;;
+    --list)
+        name="$2"
+        if grep -qxF "$name" "$STATE/registered" 2>/dev/null; then
+            echo "/mock/${name}"
+            exit 0
+        fi
+        exit 2
+        ;;
+    *)
+        exit 0
+        ;;
+esac

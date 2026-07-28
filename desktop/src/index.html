@@ -31,9 +31,15 @@
             <span id="active-path" style="font-family: 'JetBrains Mono', monospace; font-size: 13px; color: oklch(0.55 0.01 265);"></span>
           </div>
         </div>
-        <button id="btn-rescan" style="display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 8px; border: 1px solid oklch(0.85 0.008 265); background: oklch(0.99 0.002 265); color: oklch(0.35 0.02 265); font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 500; cursor: pointer;">
-          <span id="rescan-icon" style="display: inline-block; font-size: 15px;">⟳</span> <span id="rescan-label">Rescan</span>
-        </button>
+        <div style="display: flex; align-items: center; gap: 14px;">
+          <label style="display: flex; align-items: center; gap: 7px; font-size: 13px; color: oklch(0.4 0.02 265); cursor: pointer; user-select: none;">
+            <input type="checkbox" id="chk-dry-run" style="width: 15px; height: 15px; cursor: pointer;">
+            Dry run
+          </label>
+          <button id="btn-rescan" style="display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 8px; border: 1px solid oklch(0.85 0.008 265); background: oklch(0.99 0.002 265); color: oklch(0.35 0.02 265); font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 500; cursor: pointer;">
+            <span id="rescan-icon" style="display: inline-block; font-size: 15px;">⟳</span> <span id="rescan-label">Rescan</span>
+          </button>
+        </div>
       </div>
     </div>
 

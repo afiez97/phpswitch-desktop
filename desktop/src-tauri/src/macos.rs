@@ -149,9 +149,23 @@ fn formula_name_for_version(version: &str) -> Result<String, String> {
         .ok_or_else(|| format!("PHP {version} is not installed via Homebrew."))
 }
 
-pub fn set_cli(version: &str) -> Result<String, String> {
+// No root/sudo is ever needed on this backend (see the module doc comment
+// above), so a dry run doesn't change *how* the command runs — it just
+// prints the brew commands that would run instead of running them.
+pub fn set_cli(version: &str, dry_run: bool) -> Result<String, String> {
     let target = formula_name_for_version(version)?;
     let formulas = installed_formulas()?;
+
+    if dry_run {
+        let mut lines = Vec::new();
+        for (name, _) in &formulas {
+            if name != &target {
+                lines.push(format!("[dry-run] would run: brew unlink {name}"));
+            }
+        }
+        lines.push(format!("[dry-run] would run: brew link --force --overwrite {target}"));
+        return Ok(lines.join("\n"));
+    }
 
     for (name, _) in &formulas {
         let _ = brew(&["unlink", name]);
@@ -160,12 +174,23 @@ pub fn set_cli(version: &str) -> Result<String, String> {
     Ok(format!("CLI → {target} (via Homebrew)"))
 }
 
-pub fn set_apache(_version: &str) -> Result<String, String> {
+pub fn set_apache(_version: &str, _dry_run: bool) -> Result<String, String> {
     Err("Apache/mod_php isn't available via Homebrew on macOS.".to_string())
 }
 
-pub fn set_fpm(version: &str) -> Result<String, String> {
+pub fn set_fpm(version: &str, dry_run: bool) -> Result<String, String> {
     let target = formula_name_for_version(version)?;
+
+    if dry_run {
+        let mut lines = Vec::new();
+        for name in running_php_services() {
+            if name != target {
+                lines.push(format!("[dry-run] would run: brew services stop {name}"));
+            }
+        }
+        lines.push(format!("[dry-run] would run: brew services start {target}"));
+        return Ok(lines.join("\n"));
+    }
 
     for name in running_php_services() {
         if name != target {
@@ -176,11 +201,13 @@ pub fn set_fpm(version: &str) -> Result<String, String> {
     Ok(format!("PHP-FPM → {target} (via brew services)"))
 }
 
-pub fn restart_services() -> Result<String, String> {
-    if !running_service_named("nginx").is_empty() {
-        brew(&["services", "restart", "nginx"])?;
-        Ok("nginx restarted (via brew services).".to_string())
-    } else {
-        Ok("nginx is not running via Homebrew services — nothing to restart.".to_string())
+pub fn restart_services(dry_run: bool) -> Result<String, String> {
+    if running_service_named("nginx").is_empty() {
+        return Ok("nginx is not running via Homebrew services — nothing to restart.".to_string());
     }
+    if dry_run {
+        return Ok("[dry-run] would run: brew services restart nginx".to_string());
+    }
+    brew(&["services", "restart", "nginx"])?;
+    Ok("nginx restarted (via brew services).".to_string())
 }

@@ -68,12 +68,12 @@ where
 }
 
 #[tauri::command]
-async fn set_cli(version: String) -> ActionResult {
+async fn set_cli(version: String, dry_run: bool) -> ActionResult {
     run_action(move || {
         #[cfg(target_os = "linux")]
-        { linux::set_cli(&version) }
+        { linux::set_cli(&version, dry_run) }
         #[cfg(target_os = "macos")]
-        { macos::set_cli(&version) }
+        { macos::set_cli(&version, dry_run) }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         { Err("Unsupported platform.".to_string()) }
     })
@@ -81,12 +81,12 @@ async fn set_cli(version: String) -> ActionResult {
 }
 
 #[tauri::command]
-async fn set_apache(version: String) -> ActionResult {
+async fn set_apache(version: String, dry_run: bool) -> ActionResult {
     run_action(move || {
         #[cfg(target_os = "linux")]
-        { linux::set_apache(&version) }
+        { linux::set_apache(&version, dry_run) }
         #[cfg(target_os = "macos")]
-        { macos::set_apache(&version) }
+        { macos::set_apache(&version, dry_run) }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         { Err("Unsupported platform.".to_string()) }
     })
@@ -94,12 +94,12 @@ async fn set_apache(version: String) -> ActionResult {
 }
 
 #[tauri::command]
-async fn set_fpm(version: String) -> ActionResult {
+async fn set_fpm(version: String, dry_run: bool) -> ActionResult {
     run_action(move || {
         #[cfg(target_os = "linux")]
-        { linux::set_fpm(&version) }
+        { linux::set_fpm(&version, dry_run) }
         #[cfg(target_os = "macos")]
-        { macos::set_fpm(&version) }
+        { macos::set_fpm(&version, dry_run) }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         { Err("Unsupported platform.".to_string()) }
     })
@@ -107,12 +107,12 @@ async fn set_fpm(version: String) -> ActionResult {
 }
 
 #[tauri::command]
-async fn restart_services() -> ActionResult {
-    run_action(|| {
+async fn restart_services(dry_run: bool) -> ActionResult {
+    run_action(move || {
         #[cfg(target_os = "linux")]
-        { linux::restart_services() }
+        { linux::restart_services(dry_run) }
         #[cfg(target_os = "macos")]
-        { macos::restart_services() }
+        { macos::restart_services(dry_run) }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         { Err("Unsupported platform.".to_string()) }
     })

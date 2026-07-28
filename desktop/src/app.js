@@ -137,15 +137,21 @@ async function loadStatus() {
   render();
 }
 
+function isDryRun() {
+  return document.getElementById('chk-dry-run').checked;
+}
+
 async function runAction(command, version) {
   if (anyBusy()) return;
+  const dryRun = isDryRun();
   busyAction = true; busyTarget = command + ':' + version; render();
-  setLog(command === 'set_cli' ? 'Switching CLI to PHP ' + version + '…' : 'Applying change…', 'busy');
+  const verb = command === 'set_cli' ? 'Switching CLI to PHP ' + version : 'Applying change';
+  setLog((dryRun ? '[dry-run] Previewing: ' : '') + verb + '…', 'busy');
   try {
-    const data = await invoke(command, { version });
+    const data = await invoke(command, { version, dryRun });
     if (data.status) status = data.status;
-    if (command === 'set_apache' || command === 'set_fpm') dirty = true;
-    setLog(data.log, data.logKind);
+    if (!dryRun && (command === 'set_apache' || command === 'set_fpm')) dirty = true;
+    setLog((dryRun && data.ok ? '[dry-run] ' : '') + data.log, data.logKind);
   } catch (e) {
     setLog(String(e), 'warn');
   } finally {
@@ -173,13 +179,14 @@ document.getElementById('btn-rescan').addEventListener('click', async () => {
 
 document.getElementById('btn-restart').addEventListener('click', async () => {
   if (anyBusy()) return;
+  const dryRun = isDryRun();
   busyRestart = true; render();
-  setLog('Restarting web servers…', 'busy');
+  setLog((dryRun ? '[dry-run] Previewing: r' : 'R') + 'estarting web servers…', 'busy');
   try {
-    const data = await invoke('restart_services');
+    const data = await invoke('restart_services', { dryRun });
     if (data.status) status = data.status;
-    dirty = false;
-    setLog(data.log, data.logKind);
+    if (!dryRun) dirty = false;
+    setLog((dryRun && data.ok ? '[dry-run] ' : '') + data.log, data.logKind);
   } catch (e) {
     setLog(String(e), 'warn');
   } finally {

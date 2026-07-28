@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# Mock of a2enmod: really symlinks mods-available -> mods-enabled in the fake
+# root, so a test that switches Apache twice sees correct state on the
+# second call, not just an invocation log.
+
+: "${APACHE_MODS_AVAILABLE:?APACHE_MODS_AVAILABLE not set}"
+: "${APACHE_MODS_ENABLED:?APACHE_MODS_ENABLED not set}"
+
+[[ -n "${MOCK_LOG:-}" ]] && echo "a2enmod $*" >> "$MOCK_LOG"
+
+mod="${1:-}"
+avail="${APACHE_MODS_AVAILABLE}/${mod}.conf"
+
+if [[ ! -f "$avail" ]]; then
+    echo "ERROR: Module ${mod} does not exist!" >&2
+    exit 1
+fi
+
+ln -sf "$avail" "${APACHE_MODS_ENABLED}/${mod}.conf"
+exit 0

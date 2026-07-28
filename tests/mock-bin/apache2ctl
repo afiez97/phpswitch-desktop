@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# The script only ever feature-detects apache2ctl via `command -v` — it's
+# never actually executed — so this mock just needs to exist.
+exit 0

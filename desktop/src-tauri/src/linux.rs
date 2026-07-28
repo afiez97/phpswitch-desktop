@@ -152,21 +152,93 @@ fn check_version(version: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn set_cli(version: &str) -> Result<String, String> {
+// A dry run is entirely read-only (it only previews what would happen), so
+// it's routed through `run()` — no sudo, no password prompt — instead of
+// `run_privileged()`.
+pub fn set_cli(version: &str, dry_run: bool) -> Result<String, String> {
     check_version(version)?;
-    run_privileged(&["--set-cli", version])
+    if dry_run {
+        run(&["--set-cli", version, "--dry-run"])
+    } else {
+        run_privileged(&["--set-cli", version])
+    }
 }
 
-pub fn set_apache(version: &str) -> Result<String, String> {
+pub fn set_apache(version: &str, dry_run: bool) -> Result<String, String> {
     check_version(version)?;
-    run_privileged(&["--set-apache", version])
+    if dry_run {
+        run(&["--set-apache", version, "--dry-run"])
+    } else {
+        run_privileged(&["--set-apache", version])
+    }
 }
 
-pub fn set_fpm(version: &str) -> Result<String, String> {
+pub fn set_fpm(version: &str, dry_run: bool) -> Result<String, String> {
     check_version(version)?;
-    run_privileged(&["--set-fpm", version])
+    if dry_run {
+        run(&["--set-fpm", version, "--dry-run"])
+    } else {
+        run_privileged(&["--set-fpm", version])
+    }
 }
 
-pub fn restart_services() -> Result<String, String> {
-    run_privileged(&["--restart-services"])
+pub fn restart_services(dry_run: bool) -> Result<String, String> {
+    if dry_run {
+        run(&["--restart-services", "--dry-run"])
+    } else {
+        run_privileged(&["--restart-services"])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_versions_are_accepted() {
+        assert!(is_valid_version("8.3"));
+        assert!(is_valid_version("8.10"));
+        assert!(is_valid_version("10.0"));
+    }
+
+    #[test]
+    fn malformed_versions_are_rejected() {
+        for bad in ["8", "8.", ".3", "8.3.1", "8.x", "", "8..3", "a.b"] {
+            assert!(!is_valid_version(bad), "expected {bad:?} to be invalid");
+        }
+    }
+
+    #[test]
+    fn check_version_matches_is_valid_version() {
+        assert!(check_version("8.3").is_ok());
+        assert!(check_version("8.3.1").is_err());
+    }
+
+    #[test]
+    fn raw_status_parses_phpswitch_json_status_output() {
+        // Mirrors the exact shape print_json_status emits in the phpswitch
+        // bash script (phpswitch:print_json_status).
+        let json = r#"{"cli":"8.3","apache":"8.3","activeFpm":["8.3"],"apacheRunning":true,"nginxRunning":false,"versions":[{"version":"8.0","path":"/usr/bin/php8.0","hasApache":true,"hasFpm":true},{"version":"8.3","path":"/usr/bin/php8.3","hasApache":true,"hasFpm":true}]}"#;
+
+        let raw: RawStatus = serde_json::from_str(json).expect("should parse");
+        assert_eq!(raw.cli, "8.3");
+        assert_eq!(raw.apache, "8.3");
+        assert_eq!(raw.active_fpm, vec!["8.3".to_string()]);
+        assert!(raw.apache_running);
+        assert!(!raw.nginx_running);
+        assert_eq!(raw.versions.len(), 2);
+        assert_eq!(raw.versions[1].version, "8.3");
+        assert_eq!(raw.versions[1].path, "/usr/bin/php8.3");
+        assert!(raw.versions[1].has_apache);
+        assert!(raw.versions[1].has_fpm);
+    }
+
+    #[test]
+    fn raw_status_handles_no_apache_and_empty_fpm() {
+        let json = r#"{"cli":"8.3","apache":"none","activeFpm":[],"apacheRunning":false,"nginxRunning":false,"versions":[]}"#;
+        let raw: RawStatus = serde_json::from_str(json).expect("should parse");
+        assert_eq!(raw.apache, "none");
+        assert!(raw.active_fpm.is_empty());
+        assert!(raw.versions.is_empty());
+    }
 }
