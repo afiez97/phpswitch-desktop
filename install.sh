@@ -22,7 +22,7 @@ echo -e "${BOLD}Installing phpswitch...${NC}"
 # Copy script and make executable
 install -m 755 "${SCRIPT_DIR}/phpswitch" "${INSTALL_PATH}"
 
-echo -e "  ${GREEN}✓${NC} Installed to ${INSTALL_PATH}"
+echo -e "  ${GREEN}✓${NC} Installed $("${INSTALL_PATH}" --version) to ${INSTALL_PATH}"
 echo ""
 echo -e "${BOLD}Usage:${NC}"
 echo -e "  ${CYAN}phpswitch --status${NC}    Show current PHP versions"

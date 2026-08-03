@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VERSION="${1:-1.0.0}"
+VERSION="${1:-1.0.1}"
 PKG_NAME="phpswitch_${VERSION}_all"
 BUILD_ROOT="${ROOT}/build/${PKG_NAME}"
 

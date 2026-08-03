@@ -48,9 +48,12 @@ npm run dev
 
 ## CI builds
 
-`.github/workflows/desktop-build.yml` builds both platforms on a `desktop-v*` tag push (or
-manual dispatch) and uploads the installers as workflow artifacts — useful for producing the
-macOS build without owning a Mac.
+`.github/workflows/release.yml` builds both platforms (plus the CLI `.deb` from the repo
+root) on a `v*` tag push, and publishes everything to one combined GitHub Release —
+useful for producing the macOS build without owning a Mac, and the only supported way to
+ship a release others can download without a manual "publish draft" step. A manual
+`workflow_dispatch` run builds the same artifacts for a sanity check but uploads them as
+workflow artifacts instead of touching Releases.
 
 ## Architecture
 

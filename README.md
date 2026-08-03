@@ -112,6 +112,7 @@ sudo phpswitch              # interactive menu
 sudo phpswitch 8.3          # switch CLI + Apache + PHP-FPM + Nginx to PHP 8.3
 phpswitch --status          # show current status (no sudo needed)
 phpswitch --json-status     # same, as JSON
+phpswitch --version         # show the installed phpswitch version (no sudo needed)
 phpswitch --help
 ```
 
@@ -260,6 +261,10 @@ themselves while a switch is in progress.
 
 ## Changelog
 
+### phpswitch CLI v1.0.1
+- Perf: `--status`/`--json-status`/the interactive menu, and every `phpswitch <ver>` switch, used to run `systemctl list-unit-files` once per installed PHP version (and twice more inside the FPM switch itself) — on a machine with several PHP versions this added up to a dozen-plus slow systemd round trips per invocation. Now cached and looked up once per run.
+- New: `phpswitch --version` (alias `-v`) prints the installed CLI version.
+
 ### desktop app v1.0.1
 - Fix: version-switch buttons (Apache/Nginx/CLI) no longer stay clickable while a previous
   switch is still in flight, which could freeze or crash the app on repeated clicks.
@@ -274,8 +279,11 @@ themselves while a switch is in progress.
 
 - **CLI + `.deb`**: `./build-deb.sh` at the repo root (see [`build-deb.sh`](build-deb.sh)).
 - **Desktop app**: see [`desktop/README.md`](desktop/README.md) for prerequisites and build
-  steps on both platforms, plus how the `.github/workflows/desktop-build.yml` CI release
-  pipeline works.
+  steps on both platforms.
+- **Releasing**: push a `vX.Y.Z` tag (e.g. `git tag v1.0.2 && git push origin v1.0.2`) —
+  [`.github/workflows/release.yml`](.github/workflows/release.yml) builds the CLI `.deb` and
+  the desktop app's `.deb`/`.AppImage`/`.dmg`/`.app`, stamps that version into all of them, and
+  publishes them together as one GitHub Release — no manual "publish draft" step needed.
 
 ---
 

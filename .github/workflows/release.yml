@@ -1,0 +1,157 @@
+name: Release
+
+# Push a version tag (e.g. `v1.0.2`) to build and publish everything in one
+# combined GitHub Release: the CLI's phpswitch_X.Y.Z_all.deb, plus the
+# desktop app's .deb/.AppImage (Linux) and .dmg/.app (macOS). The release is
+# published immediately (not a draft) — no manual step needed for anyone
+# else to grab the artifacts.
+#
+# workflow_dispatch runs the same builds for a quick sanity check but never
+# touches Releases — artifacts land as workflow run artifacts instead.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is_release: ${{ steps.version.outputs.is_release }}
+    steps:
+      - id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  cli:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Stamps the tag's version into the checked-out copy only (never
+      # committed back) so `phpswitch --version` in the released .deb always
+      # matches the release tag, even if PHPSWITCH_VERSION in the repo
+      # wasn't bumped in the same commit.
+      - name: Stamp release version
+        if: needs.version.outputs.is_release == 'true'
+        run: |
+          sed -i "s/^PHPSWITCH_VERSION=\".*\"/PHPSWITCH_VERSION=\"${{ needs.version.outputs.version }}\"/" phpswitch
+
+      - name: Build .deb
+        run: bash build-deb.sh "${{ needs.version.outputs.version }}"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: phpswitch-cli-deb
+          path: build/*.deb
+
+      - name: Publish release asset
+        if: needs.version.outputs.is_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: phpswitch ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          files: build/*.deb
+
+  desktop:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-latest
+            args: ""
+          - platform: macos-latest
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm install
+
+      # Same rationale as the CLI's version stamp above: keeps the built
+      # app's version equal to the release tag without relying on Cargo.toml
+      # / tauri.conf.json having been hand-bumped beforehand.
+      - name: Stamp release version into desktop manifests
+        if: needs.version.outputs.is_release == 'true'
+        working-directory: desktop
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          node -e "
+            const fs = require('fs');
+            const version = process.env.VERSION;
+            const confPath = 'src-tauri/tauri.conf.json';
+            const conf = JSON.parse(fs.readFileSync(confPath, 'utf8'));
+            conf.version = version;
+            fs.writeFileSync(confPath, JSON.stringify(conf, null, 2) + '\n');
+            const cargoPath = 'src-tauri/Cargo.toml';
+            const cargo = fs.readFileSync(cargoPath, 'utf8')
+              .replace(/^version = \".*\"/m, 'version = \"' + version + '\"');
+            fs.writeFileSync(cargoPath, cargo);
+          "
+
+      # On a `v*` tag push, this also creates/updates the SAME combined
+      # release the `cli` job publishes to (tauri-action upserts by tag, so
+      # concurrent matrix jobs and the `cli` job's own release-asset upload
+      # all converge on one release). On workflow_dispatch (no tag), it just
+      # builds and uploads workflow artifacts below — no release is touched.
+      - name: Build the app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: desktop
+          tagName: ${{ needs.version.outputs.is_release == 'true' && github.ref_name || '' }}
+          releaseName: ${{ needs.version.outputs.is_release == 'true' && format('phpswitch {0}', github.ref_name) || '' }}
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: phpswitch-desktop-${{ matrix.platform }}
+          path: |
+            desktop/src-tauri/target/release/bundle/deb/*.deb
+            desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+            desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/release/bundle/macos/*.app
+          if-no-files-found: ignore

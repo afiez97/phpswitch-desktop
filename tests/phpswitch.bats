@@ -180,6 +180,18 @@ setup() {
     [[ "$output" == *"\"path\":\"${PHP_BIN_DIR}/php8.3\""* ]]
 }
 
+@test "main --version prints the phpswitch package version and needs no root" {
+    run main --version
+    [ "$status" -eq 0 ]
+    [ "$output" = "phpswitch ${PHPSWITCH_VERSION}" ]
+}
+
+@test "main -v is a recognized alias for --version" {
+    run main -v
+    [ "$status" -eq 0 ]
+    [ "$output" = "phpswitch ${PHPSWITCH_VERSION}" ]
+}
+
 # ── validate_version_arg ─────────────────────────────────
 
 @test "validate_version_arg rejects a malformed version string" {
